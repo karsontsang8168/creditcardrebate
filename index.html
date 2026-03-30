@@ -3,21 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>信用卡戰略</title>
+    <title>信用卡戰略 2.1</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <style>
-        -webkit-tap-highlight-color: transparent;
-        body { padding-top: env(safe-area-inset-top); background: #f8fafc; }
-    </style>
 </head>
-<body class="pb-20">
+<body class="bg-slate-50 pb-20">
     <div class="max-w-md mx-auto px-4">
         <div class="flex justify-between items-center py-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-500">2.0</span></h1>
+                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-500">2.1</span></h1>
                 <p class="text-sm text-slate-500" id="currentDateDisplay"></p>
             </div>
             <button onclick="location.reload()" class="p-2 bg-white rounded-full shadow-sm"><i class="fa-solid fa-rotate"></i></button>
@@ -30,7 +26,7 @@
             </div>
             <div class="mb-6">
                 <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">消費類別</label>
-                <select id="cat" class="w-full mt-2 p-3 bg-slate-50 rounded-xl font-medium text-slate-700 outline-none border-none">
+                <select id="cat" class="w-full mt-2 p-3 bg-slate-50 rounded-xl font-medium text-slate-700 outline-none">
                     <option value="online">網上購物 (Online)</option>
                     <option value="japan">日本實體店 (Japan)</option>
                     <option value="overseas">海外實體店 (Overseas)</option>
@@ -39,16 +35,16 @@
                     <option value="local">一般本地實體 (Local)</option>
                 </select>
             </div>
-            <button onclick="suggestBest()" class="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition">即時分析最抵卡</button>
+            <button onclick="suggestBest()" class="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition">分析最優選</button>
         </div>
 
-        <div id="resultModal" class="hidden bg-blue-50 border-2 border-blue-200 p-5 rounded-2xl mb-6 relative animate-bounce">
+        <div id="resultModal" class="hidden bg-blue-50 border-2 border-blue-200 p-5 rounded-2xl mb-6 shadow-inner">
             <div class="flex items-start">
-                <div class="bg-blue-600 text-white p-3 rounded-lg mr-4"><i class="fa-solid fa-star"></i></div>
+                <div class="bg-blue-600 text-white p-3 rounded-lg mr-4"><i class="fa-solid fa-calculator"></i></div>
                 <div class="flex-1">
                     <h2 class="font-bold text-blue-900" id="recName">--</h2>
-                    <p class="text-sm text-blue-700" id="recReason">--</p>
-                    <div class="mt-3 flex gap-2">
+                    <p class="text-sm text-blue-700 mt-1" id="recReason">--</p>
+                    <div class="mt-4 flex gap-2">
                         <button onclick="confirmTransaction()" class="bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-bold">確認已簽賬</button>
                         <button onclick="closeResult()" class="bg-slate-200 text-slate-600 text-xs px-4 py-2 rounded-lg">取消</button>
                     </div>
@@ -58,21 +54,17 @@
 
         <h3 class="font-bold text-slate-800 mb-4 px-1">信用卡餘額總覽</h3>
         <div id="cardList" class="space-y-3"></div>
-
-        <button onclick="clearData()" class="w-full mt-10 text-xs text-slate-300 font-medium pb-10">重設所有本地紀錄</button>
+        <button onclick="clearData()" class="w-full mt-10 text-xs text-slate-300 font-medium pb-10 underline">重設所有數據</button>
     </div>
 
     <script>
-        // 設定今日日期
-        const today = new Date(); // 實際使用會用系統時間
-        document.getElementById('currentDateDisplay').innerText = today.toLocaleDateString();
+        const baseRate = 0.004; // 基本 0.4%
 
-        // 卡片規則引擎
         let cards = {
             hsbc_red: { name: "HSBC Red", cap: 10000, spent: 0, rate: 0.04, cats: ['online'] },
             boc_chill: { name: "BOC Chill", cap: 3260, spent: 0, rate: 0.05, cats: ['online', 'overseas', 'japan'] },
             boc_sogo: { name: "BOC Sogo Visa", cap: 2000, spent: 0, rate: 0.054, cats: ['mobile'] },
-            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 3508.49, rate: 0.06, cats: ['online', 'japan'], cycle: 8 },
+            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 3508.49, rate: 0.06, cats: ['online', 'japan'] },
             sim_world: { name: "Sim World", cap: 2500, spent: 0, rate: 0.08, cats: ['overseas', 'japan'], threshold: 1000, nonOnlineSpent: 0 },
             imotion: { name: "中信 i-Motion", cap: 3800, spent: 0, rate: 0.0526, cats: ['online', 'dining'], threshold: 3800 }
         };
@@ -80,7 +72,8 @@
         let lastRec = null;
 
         function load() {
-            const data = localStorage.getItem('credit_card_data');
+            document.getElementById('currentDateDisplay').innerText = new Date().toLocaleDateString();
+            const data = localStorage.getItem('credit_card_data_v2');
             if (data) {
                 const saved = JSON.parse(data);
                 Object.keys(cards).forEach(k => { if(saved[k]) cards[k].spent = saved[k]; });
@@ -93,70 +86,82 @@
             list.innerHTML = '';
             Object.keys(cards).forEach(k => {
                 const card = cards[k];
-                const remain = Math.max(0, card.cap - card.spent).toFixed(0);
+                const remain = Math.max(0, card.cap - card.spent).toFixed(1);
                 const progress = Math.min(100, (card.spent / card.cap) * 100);
                 list.innerHTML += `
-                    <div class="bg-white p-4 rounded-xl shadow-sm flex items-center justify-between border border-slate-50">
-                        <div class="flex-1">
-                            <div class="flex justify-between mb-1">
-                                <span class="font-bold text-slate-700 text-sm">${card.name}</span>
-                                <span class="text-xs text-slate-400">剩 $${remain}</span>
-                            </div>
-                            <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                                <div class="bg-blue-500 h-full" style="width: ${progress}%"></div>
-                            </div>
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                        <div class="flex justify-between mb-1">
+                            <span class="font-bold text-slate-700 text-sm">${card.name}</span>
+                            <span class="text-xs ${remain <= 100 ? 'text-red-500 font-bold' : 'text-slate-400'}">剩 $${remain}</span>
                         </div>
-                    </div>
-                `;
+                        <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                            <div class="${remain <= 100 ? 'bg-red-500' : 'bg-blue-500'} h-full" style="width: ${progress}%"></div>
+                        </div>
+                    </div>`;
             });
         }
 
         function suggestBest() {
             const amt = parseFloat(document.getElementById('amt').value);
             const cat = document.getElementById('cat').value;
-            if(!amt) return;
+            if(!amt || amt <= 0) return;
 
-            let best = null;
-            let maxRebate = -1;
+            let results = [];
 
             Object.keys(cards).forEach(k => {
                 const c = cards[k];
-                if (!c.cats.includes(cat) && cat !== 'local') return;
+                let expectedRebate = 0;
+                let reason = "";
 
-                let rate = 0.004; // 基本
-                if (c.cats.includes(cat) && c.spent < c.cap) {
-                    rate = c.rate;
-                    // 特殊規則
-                    if (k === 'sim_world' && (c.nonOnlineSpent + (cat!=='online'?amt:0) < 1000)) rate = 0.004;
-                    if (k === 'imotion' && (c.spent + amt < 3800)) rate = 0.004;
+                const isEligible = c.cats.includes(cat) || cat === 'local';
+                const remainCap = Math.max(0, c.cap - c.spent);
+
+                if (isEligible) {
+                    // 檢查特殊門檻 (Sim World / i-Motion)
+                    let effectiveRate = c.rate;
+                    if (k === 'sim_world' && (c.nonOnlineSpent + (cat!=='online'?amt:0) < 1000)) effectiveRate = baseRate;
+                    if (k === 'imotion' && (c.spent + amt < 3800)) effectiveRate = baseRate;
+
+                    if (amt <= remainCap) {
+                        expectedRebate = amt * effectiveRate;
+                        reason = `全數可享 ${(effectiveRate*100).toFixed(1)}% 回贈 ($${expectedRebate.toFixed(1)})`;
+                    } else {
+                        expectedRebate = (remainCap * effectiveRate) + ((amt - remainCap) * baseRate);
+                        reason = `部分爆額！$${remainCap.toFixed(0)} 享 ${(effectiveRate*100).toFixed(1)}%，餘下享 0.4% (總共 $${expectedRebate.toFixed(1)})`;
+                    }
+                } else {
+                    expectedRebate = amt * baseRate;
+                    reason = `類別不合，只享 0.4% 基回 ($${expectedRebate.toFixed(1)})`;
                 }
 
-                if (rate > maxRebate) {
-                    maxRebate = rate;
-                    best = k;
-                }
+                results.push({ key: k, rebate: expectedRebate, reason: reason });
             });
 
-            lastRec = { key: best, amount: amt, cat: cat };
-            document.getElementById('recName').innerText = `${cards[best].name}`;
-            document.getElementById('recReason').innerText = `預計回贈 ${(maxRebate*100).toFixed(1)}%。簽完呢筆仲剩 $${(cards[best].cap - cards[best].spent - amt).toFixed(0)} 額度。`;
+            // 排序搵最高回贈金額
+            results.sort((a, b) => b.rebate - a.rebate);
+            const best = results[0];
+
+            lastRec = { key: best.key, amount: amt, cat: cat };
+            const card = cards[best.key];
+            const newRemain = Math.max(0, card.cap - card.spent - amt).toFixed(0);
+
+            document.getElementById('recName').innerText = `推薦：${card.name}`;
+            document.getElementById('recReason').innerHTML = `${best.reason}<br>簽完後剩餘限額：<span class="font-bold">$${newRemain}</span>`;
             document.getElementById('resultModal').classList.remove('hidden');
         }
 
         function confirmTransaction() {
             const c = cards[lastRec.key];
             c.spent += lastRec.amount;
-            if (lastRec.cat !== 'online') {
-                if(c.nonOnlineSpent !== undefined) c.nonOnlineSpent += lastRec.amount;
-            }
-            localStorage.setItem('credit_card_data', JSON.stringify(Object.keys(cards).reduce((acc, k) => ({...acc, [k]: cards[k].spent}), {})));
+            if (lastRec.cat !== 'online' && c.nonOnlineSpent !== undefined) c.nonOnlineSpent += lastRec.amount;
+            localStorage.setItem('credit_card_data_v2', JSON.stringify(Object.keys(cards).reduce((acc, k) => ({...acc, [k]: cards[k].spent}), {})));
             render();
             closeResult();
             document.getElementById('amt').value = '';
         }
 
         function closeResult() { document.getElementById('resultModal').classList.add('hidden'); }
-        function clearData() { if(confirm('清除所有數據?')) { localStorage.removeItem('credit_card_data'); location.reload(); } }
+        function clearData() { if(confirm('清除所有數據?')) { localStorage.removeItem('credit_card_data_v2'); location.reload(); } }
 
         load();
     </script>
