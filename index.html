@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>信用卡戰略 2.4</title>
+    <title>信用卡戰略 2.7</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -12,8 +12,8 @@
     <div class="max-w-md mx-auto px-4">
         <div class="flex justify-between items-center py-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-500">2.4</span></h1>
-                <p class="text-[10px] text-slate-400">支付方式與類別分離架構</p>
+                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-500">2.7</span></h1>
+                <p class="text-[10px] text-slate-400">真實情況機制</p>
             </div>
             <div class="flex gap-2">
                 <button onclick="undoLast()" id="undoBtn" class="hidden p-2 bg-orange-100 text-orange-600 rounded-full shadow-sm text-xs px-3 font-bold">撤銷</button>
@@ -53,20 +53,28 @@
         </div>
 
         <div id="resultArea" class="hidden mb-6">
-            <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">💡 推薦排行</h3>
+            <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">💡 推薦排行 (請先點選一張卡)</h3>
             <div id="recommendations" class="space-y-3"></div>
+            
+            <div id="confirmActionDiv" class="hidden mt-4">
+                <button id="finalConfirmBtn" onclick="executeTransaction()" class="w-full bg-green-600 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition animate-pulse">
+                    確認寫入數據
+                </button>
+            </div>
         </div>
 
         <h3 class="font-bold text-slate-800 mb-4 px-1">信用卡餘額進度</h3>
         <div id="cardList" class="space-y-3"></div>
+        <button onclick="clearData()" class="w-full mt-10 text-xs text-slate-300 font-medium pb-10 underline text-center">重設所有數據 (清零)</button>
     </div>
 
     <script>
         let cards = {
             hsbc_red: { name: "HSBC Red", cap: 10000, spent: 0, rates: { online_hkd: 0.04, online_fc: 0.04 } },
             boc_chill: { name: "BOC Chill", cap: 3260, spent: 0, rates: { online_hkd: 0.05, online_fc: 0.05, japan_phys: 0.05, overseas_phys: 0.05 } },
-            boc_sogo: { name: "BOC Sogo Visa", cap: 2000, spent: 0, rates: {} }, // 費率由 checkbox 動態決定
-            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 3508.49, rates: { online_hkd: 0.06, online_fc: 0.06, japan_phys: 0.03 } },
+            boc_sogo: { name: "BOC Sogo Visa", cap: 2000, spent: 0, rates: {} }, 
+            // Wakuwaku 初始值改回 0，真正淨空
+            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 0, rates: { online_hkd: 0.06, online_fc: 0.06, japan_phys: 0.03 } },
             sim_world: { name: "Sim World", cap: 2500, spent: 0, threshold: 1000, nonOnlineSpent: 0, rates: { japan_phys: 0.08, overseas_phys: 0.08 } },
             imotion: { name: "中信 i-Motion", cap: 3800, spent: 0, threshold: 3800, rates: { online_hkd: 0.0526, online_fc: 0.0526, dining_local: 0.0526 } },
             citi_cb: { name: "Citi Cash Back", cap: Infinity, spent: 0, hidden: true, rates: { dining_local: 0.02, online_fc: 0.02, japan_phys: 0.02, overseas_phys: 0.02, default: 0.01 } },
@@ -74,9 +82,10 @@
         };
 
         let history = [];
+        let pendingTx = null;
 
         function load() {
-            const data = localStorage.getItem('cc_strategy_v2.4');
+            const data = localStorage.getItem('cc_strategy_v2.7');
             if (data) {
                 const saved = JSON.parse(data);
                 Object.keys(cards).forEach(k => { if(saved.cards[k]) cards[k].spent = saved.cards[k]; if(saved.cards[k+'_non']) cards[k].nonOnlineSpent = saved.cards[k+'_non']; });
@@ -108,72 +117,20 @@
             const isMobile = document.getElementById('isMobilePay').checked;
             if(!amt || amt <= 0) return;
 
+            pendingTx = null;
+            document.getElementById('confirmActionDiv').classList.add('hidden');
+
             let allOptions = [];
             Object.keys(cards).forEach(k => {
                 const c = cards[k];
                 const remainCap = Math.max(0, (c.cap || Infinity) - c.spent);
                 let rate = c.rates[cat] || c.rates['default'] || 0.004;
+                let warningMsg = '';
                 
-                // 動態手機支付邏輯
-                if (k === 'boc_sogo' && isMobile && !cat.includes('online')) {
-                    rate = 0.054; // 只要有開手機支付，且不是網購，就賦予 5.4%
+                if (k === 'boc_sogo' && isMobile && !cat.includes('online')) rate = 0.054;
+                
+                if (k === 'sim_world' && (c.nonOnlineSpent + (cat.includes('phys')||cat.includes('dining')?amt:0) < 1000)) {
+                    warningMsg = '<span class="text-orange-500 ml-1 text-[10px]"><i class="fa-solid fa-triangle-exclamation"></i> 需全月滿$1000</span>';
                 }
-
-                // 門檻判斷邏輯
-                if (k === 'sim_world' && (c.nonOnlineSpent + (cat.includes('phys')||cat.includes('dining')?amt:0) < 1000)) rate = 0.004;
-                if (k === 'imotion' && (c.spent + amt < 3800)) rate = 0.004;
-
-                let rebate = (amt <= remainCap) ? (amt * rate) : (remainCap * rate + (amt - remainCap) * 0.004);
-                allOptions.push({ key: k, rebate: rebate, rate: rate, remain: Math.max(0, remainCap - amt) });
-            });
-
-            allOptions.sort((a, b) => b.rebate - a.rebate);
-            const top3 = allOptions.slice(0, 3);
-
-            const resDiv = document.getElementById('recommendations');
-            resDiv.innerHTML = '';
-            top3.forEach((opt, index) => {
-                resDiv.innerHTML += `
-                    <div onclick="confirmTransaction('${opt.key}', ${amt}, '${cat}')" class="bg-white p-4 rounded-xl border-2 ${index===0?'border-blue-500 bg-blue-50':'border-slate-100'} cursor-pointer active:scale-95">
-                        <div class="flex justify-between items-center">
-                            <div><span class="text-[10px] font-bold text-blue-500 uppercase">Choice ${index+1}</span><h4 class="font-bold text-slate-800">${cards[opt.key].name}</h4></div>
-                            <div class="text-right"><span class="text-lg font-black text-slate-800">$${opt.rebate.toFixed(1)}</span></div>
-                        </div>
-                        <div class="mt-1 text-xs text-slate-500">利率: ${(opt.rate*100).toFixed(1)}% | 餘額: $${opt.remain.toFixed(0)}</div>
-                    </div>`;
-            });
-            document.getElementById('resultArea').classList.remove('hidden');
-        }
-
-        function confirmTransaction(key, amount, cat) {
-            const nonOnlineAdd = (cat.includes('phys') || cat.includes('dining')) ? amount : 0;
-            history.push({ key, amount, nonOnlineAdd });
-            if (history.length > 5) history.shift();
-            cards[key].spent += amount;
-            if (cards[key].nonOnlineSpent !== undefined) cards[key].nonOnlineSpent += nonOnlineAdd;
-            saveAndRefresh();
-            document.getElementById('amt').value = '';
-            document.getElementById('resultArea').classList.add('hidden');
-            document.getElementById('isMobilePay').checked = false; // 重置 Toggle
-        }
-
-        function undoLast() {
-            if (history.length === 0) return;
-            const last = history.pop();
-            cards[last.key].spent -= last.amount;
-            if (cards[last.key].nonOnlineSpent !== undefined) cards[last.key].nonOnlineSpent -= last.nonOnlineAdd;
-            saveAndRefresh();
-        }
-
-        function saveAndRefresh() {
-            const cardData = {};
-            Object.keys(cards).forEach(k => { cardData[k] = cards[k].spent; if(cards[k].nonOnlineSpent) cardData[k+'_non'] = cards[k].nonOnlineSpent; });
-            localStorage.setItem('cc_strategy_v2.4', JSON.stringify({ cards: cardData, history: history }));
-            render(); updateUndoBtn();
-        }
-
-        function updateUndoBtn() { document.getElementById('undoBtn').classList.toggle('hidden', history.length === 0); }
-        load();
-    </script>
-</body>
-</html>
+                if (k === 'imotion' && (c.spent + amt < 3800)) {
+                    warningMsg = '<span class="text-orange-500 ml
