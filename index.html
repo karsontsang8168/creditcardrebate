@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>信用卡戰略 3.3</title>
+    <title>信用卡戰略 3.4</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -12,8 +12,8 @@
     <div class="max-w-md mx-auto px-4">
         <div class="flex justify-between items-center py-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-600">3.3</span></h1>
-                <p class="text-[10px] text-slate-400 font-medium">Shared Rebate Pool Architecture</p>
+                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-600">3.4</span></h1>
+                <p class="text-[10px] text-slate-400 font-medium">SafeMode & Shared Rebate Pool</p>
             </div>
             <button onclick="undoLast()" id="undoBtn" class="hidden p-2 bg-orange-100 text-orange-600 rounded-lg shadow-sm text-xs px-4 font-bold active:scale-95 transition">
                 <i class="fa-solid fa-rotate-left mr-1"></i> 撤銷
@@ -77,12 +77,19 @@
     </div>
 
     <script>
+        // 安全數字轉換器，防止 Infinity 搞死瀏覽器
+        function safeFixed(num, decimals) {
+            if (num === Infinity || num === -Infinity) return '無上限';
+            if (isNaN(num)) return '0';
+            return '$' + Number(num).toFixed(decimals);
+        }
+
         let cards = {
             hsbc_red: { name: "HSBC Red", cap: 10000, spent: 0, group: 'monthly', rates: { online_hkd: 0.04, online_fc: 0.04 } },
             boc_chill: { name: "BOC Chill", cap: 3260, spent: 0, group: 'monthly', rates: { online_hkd: 0.05, online_fc: 0.05, japan_phys: 0.05, overseas_phys: 0.05 } },
             boc_sogo: { name: "BOC Sogo Visa", cap: 2000, spent: 0, group: 'monthly', rates: {} }, 
             
-            // 3.3 改動：AEON 加入 shared_rebate_cap (200蚊回贈池)
+            // 3.4 改動核心：AEON 引入 shared_rebate_cap 回贈池
             aeon_waku: { name: "Aeon Wakuwaku", cap: Infinity, spent: 0, group: 'aeon', shared_rebate_cap: 200, rebate_used: 0, rates: { online_hkd: 0.06, online_fc: 0.06, japan_phys: 0.03 } },
             
             sim_world: { name: "Sim World", cap: 2500, spent: 0, group: 'monthly', threshold: 1000, nonOnlineSpent: 0, rates: { japan_phys: 0.08, overseas_phys: 0.08 } },
@@ -95,12 +102,12 @@
         let pendingTx = null;
 
         function load() {
-            const data = localStorage.getItem('cc_strategy_v3.3');
+            const data = localStorage.getItem('cc_strategy_v3.4');
             if (data) {
                 const saved = JSON.parse(data);
                 Object.keys(cards).forEach(k => { 
-                    if(saved.cards[k]) cards[k].spent = saved.cards[k]; 
-                    if(saved.cards[k+'_non']) cards[k].nonOnlineSpent = saved.cards[k+'_non']; 
+                    if(saved.cards[k] !== undefined) cards[k].spent = saved.cards[k]; 
+                    if(saved.cards[k+'_non'] !== undefined) cards[k].nonOnlineSpent = saved.cards[k+'_non']; 
                     if(cards[k].shared_rebate_cap && saved.cards[k+'_rebate'] !== undefined) cards[k].rebate_used = saved.cards[k+'_rebate'];
                 });
                 history = saved.history || [];
@@ -119,17 +126,16 @@
                 let barColor = '';
                 let textColor = '';
 
-                // 判斷係咪用「回贈池」模式 (AEON Wakuwaku)
                 if (cards[k].shared_rebate_cap) {
                     let remainRebate = Math.max(0, cards[k].shared_rebate_cap - (cards[k].rebate_used || 0));
                     progress = Math.min(100, ((cards[k].rebate_used || 0) / cards[k].shared_rebate_cap) * 100);
-                    remainText = `回贈限額剩 $${remainRebate.toFixed(1)}`;
-                    barColor = remainRebate < 20 ? 'bg-red-500' : 'bg-purple-500'; // Wakuwaku 專屬紫色
+                    remainText = `回贈池剩 $${remainRebate.toFixed(1)}`;
+                    barColor = remainRebate < 20 ? 'bg-red-500' : 'bg-purple-500'; 
                     textColor = remainRebate < 20 ? 'text-red-500' : 'text-purple-600';
                 } else {
                     let remain = Math.max(0, cards[k].cap - cards[k].spent);
                     progress = Math.min(100, (cards[k].spent / cards[k].cap) * 100);
-                    remainText = `簽賬限額剩 $${remain.toFixed(0)}`;
+                    remainText = `限額剩 $${remain.toFixed(0)}`;
                     barColor = remain < 100 ? 'bg-red-500' : 'bg-blue-600';
                     textColor = remain < 100 ? 'text-red-500' : 'text-slate-500';
                 }
@@ -146,67 +152,71 @@
         }
 
         function suggestBest() {
-            const amtVal = document.getElementById('amt').value;
-            if(!amtVal || parseFloat(amtVal) <= 0) { alert("⚠️ 請先輸入金額"); return; }
-            const amt = parseFloat(amtVal);
-            const cat = document.getElementById('cat').value;
-            const isMobile = document.getElementById('isMobilePay').checked;
+            try {
+                const amtVal = document.getElementById('amt').value;
+                if(!amtVal || parseFloat(amtVal) <= 0) { alert("⚠️ 請先輸入金額"); return; }
+                const amt = parseFloat(amtVal);
+                const cat = document.getElementById('cat').value;
+                const isMobile = document.getElementById('isMobilePay').checked;
 
-            pendingTx = null;
-            document.getElementById('confirmActionDiv').classList.add('hidden');
+                pendingTx = null;
+                document.getElementById('confirmActionDiv').classList.add('hidden');
 
-            let allOptions = [];
-            Object.keys(cards).forEach(k => {
-                const c = cards[k];
-                let rate = c.rates[cat] || c.rates['default'] || 0.004;
-                let warning = '';
-                
-                if (k === 'boc_sogo' && isMobile && !cat.includes('online')) rate = 0.054;
-                if (k === 'sim_world' && (c.nonOnlineSpent + (cat.includes('phys')||cat.includes('dining')?amt:0) < 1000)) warning = '⚠️需滿$1000';
-                if (k === 'imotion' && (c.spent + amt < 3800)) warning = '⚠️需滿$3800';
+                let allOptions = [];
+                Object.keys(cards).forEach(k => {
+                    const c = cards[k];
+                    let rate = c.rates[cat] || c.rates['default'] || 0.004;
+                    let warning = '';
+                    
+                    if (k === 'boc_sogo' && isMobile && !cat.includes('online')) rate = 0.054;
+                    if (k === 'sim_world' && (c.nonOnlineSpent + (cat.includes('phys')||cat.includes('dining')?amt:0) < 1000)) warning = '⚠️需滿$1000';
+                    if (k === 'imotion' && (c.spent + amt < 3800)) warning = '⚠️需滿$3800';
 
-                let remainCap = 0;
-                
-                // 動態換算限額 (Shared Rebate Pool Logic)
-                if (c.shared_rebate_cap) {
-                    let extraRate = rate - 0.004; // 銀行通常係用「額外回贈」去計嗰 200 蚊上限
-                    if (extraRate > 0) {
-                        let remainRebate = Math.max(0, c.shared_rebate_cap - (c.rebate_used || 0));
-                        remainCap = remainRebate / extraRate; // 動態算出「喺呢個消費類別下，仲可以簽幾多錢」
+                    let remainCap = 0;
+                    
+                    // 動態換算限額 (Shared Rebate Pool Logic)
+                    if (c.shared_rebate_cap) {
+                        let extraRate = rate - 0.004; 
+                        if (extraRate > 0) {
+                            let remainRebate = Math.max(0, c.shared_rebate_cap - (c.rebate_used || 0));
+                            remainCap = remainRebate / extraRate; 
+                        } else {
+                            remainCap = Infinity; 
+                        }
                     } else {
-                        remainCap = Infinity; // 如果只係0.4%，唔扣200蚊限額
+                        remainCap = Math.max(0, (c.cap || Infinity) - c.spent);
                     }
-                } else {
-                    remainCap = Math.max(0, (c.cap || Infinity) - c.spent);
-                }
 
-                let rebate = (amt <= remainCap) ? (amt * rate) : (remainCap * rate + (amt - remainCap) * 0.004);
-                allOptions.push({ key: k, rebate: rebate, rate: rate, remain: Math.max(0, remainCap - amt), warning: warning });
-            });
+                    let rebate = (amt <= remainCap) ? (amt * rate) : (remainCap * rate + (amt - remainCap) * 0.004);
+                    allOptions.push({ key: k, rebate: rebate, rate: rate, remain: Math.max(0, remainCap - amt), warning: warning });
+                });
 
-            allOptions.sort((a, b) => b.rebate - a.rebate);
-            const top3 = allOptions.slice(0, 3);
+                allOptions.sort((a, b) => b.rebate - a.rebate);
+                const top3 = allOptions.slice(0, 3);
 
-            const resDiv = document.getElementById('recommendations');
-            resDiv.innerHTML = '';
-            top3.forEach((opt, index) => {
-                const remainText = opt.remain === Infinity ? '無上限' : '$' + opt.remain.toFixed(0);
-                resDiv.innerHTML += `
-                    <div id="card_${opt.key}" onclick="selectCard('${opt.key}', ${amt}, '${cat}')" class="bg-white p-4 rounded-2xl border-2 border-slate-100 cursor-pointer active:scale-95 transition-all shadow-sm">
-                        <div class="flex justify-between items-center">
-                            <div class="flex-1">
-                                <span class="text-[9px] font-black text-slate-300 uppercase tracking-widest" id="badge_${opt.key}">Rank ${index+1}</span>
-                                <h4 class="font-black text-slate-800 text-sm leading-tight">${cards[opt.key].name} <span class="text-orange-500 text-[10px] ml-1">${opt.warning}</span></h4>
-                                <p class="text-[10px] text-slate-500 mt-1">
-                                    潛在利率: <span class="font-bold text-slate-700">${(opt.rate*100).toFixed(1)}%</span> | 
-                                    ${cards[opt.key].shared_rebate_cap ? '動態' : '簽後'}餘額: <span class="font-bold text-slate-700">${remainText}</span>
-                                </p>
+                const resDiv = document.getElementById('recommendations');
+                resDiv.innerHTML = '';
+                top3.forEach((opt, index) => {
+                    resDiv.innerHTML += `
+                        <div id="card_${opt.key}" onclick="selectCard('${opt.key}', ${amt}, '${cat}')" class="bg-white p-4 rounded-2xl border-2 border-slate-100 cursor-pointer active:scale-95 transition-all shadow-sm">
+                            <div class="flex justify-between items-center">
+                                <div class="flex-1">
+                                    <span class="text-[9px] font-black text-slate-300 uppercase tracking-widest" id="badge_${opt.key}">Rank ${index+1}</span>
+                                    <h4 class="font-black text-slate-800 text-sm leading-tight">${cards[opt.key].name} <span class="text-orange-500 text-[10px] ml-1">${opt.warning}</span></h4>
+                                    <p class="text-[10px] text-slate-500 mt-1">
+                                        潛在利率: <span class="font-bold text-slate-700">${(opt.rate*100).toFixed(1)}%</span> | 
+                                        ${cards[opt.key].shared_rebate_cap ? '動態' : '簽後'}餘額: <span class="font-bold text-slate-700">${safeFixed(opt.remain, 0)}</span>
+                                    </p>
+                                </div>
+                                <div class="text-right ml-2"><span class="text-xl font-black text-slate-900">${safeFixed(opt.rebate, 1)}</span></div>
                             </div>
-                            <div class="text-right ml-2"><span class="text-xl font-black text-slate-900">$${opt.rebate.toFixed(1)}</span></div>
-                        </div>
-                    </div>`;
-            });
-            document.getElementById('resultArea').classList.remove('hidden');
+                        </div>`;
+                });
+                document.getElementById('resultArea').classList.remove('hidden');
+            } catch (err) {
+                // 如果再死機，直接彈出詳細錯誤報告！
+                alert("系統發生錯誤，請截圖給我：\n" + err.message);
+            }
         }
 
         function selectCard(key, amount, cat) {
@@ -238,4 +248,62 @@
                 if (extraRate > 0) {
                     let remainRebate = Math.max(0, cards[key].shared_rebate_cap - (cards[key].rebate_used || 0));
                     addedRebate = (amount <= (remainRebate/extraRate)) ? (amount * extraRate) : remainRebate;
-                    cards[key].rebate_used = (cards[key].rebate_used ||
+                    cards[key].rebate_used = (cards[key].rebate_used || 0) + addedRebate;
+                }
+            }
+
+            history.push({ key, amount, nonOnlineAdd, addedRebate });
+            if (history.length > 5) history.shift();
+            
+            cards[key].spent += amount;
+            if (cards[key].nonOnlineSpent !== undefined) cards[key].nonOnlineSpent += nonOnlineAdd;
+            
+            saveAndRefresh();
+            document.getElementById('amt').value = '';
+            document.getElementById('resultArea').classList.add('hidden');
+            document.getElementById('isMobilePay').checked = false; 
+            pendingTx = null;
+        }
+
+        function resetGroup(groupName) {
+            const groupDesc = groupName === 'monthly' ? "1 號週期卡 (BOC/HSBC/中信)" : "AEON Wakuwaku";
+            if(confirm(`⚠️ 確定要重設 ${groupDesc} 嗎？`)) {
+                Object.keys(cards).forEach(k => {
+                    if(cards[k].group === groupName) {
+                        cards[k].spent = 0;
+                        if(cards[k].nonOnlineSpent !== undefined) cards[k].nonOnlineSpent = 0;
+                        if(cards[k].shared_rebate_cap) cards[k].rebate_used = 0;
+                    }
+                });
+                saveAndRefresh();
+            }
+        }
+
+        function undoLast() {
+            if (history.length === 0) return;
+            const last = history.pop();
+            cards[last.key].spent -= last.amount;
+            if (cards[last.key].nonOnlineSpent !== undefined) cards[last.key].nonOnlineSpent -= last.nonOnlineAdd;
+            if (cards[last.key].shared_rebate_cap && last.addedRebate) {
+                cards[last.key].rebate_used = Math.max(0, (cards[last.key].rebate_used || 0) - last.addedRebate);
+            }
+            saveAndRefresh();
+        }
+
+        function saveAndRefresh() {
+            const cardData = {};
+            Object.keys(cards).forEach(k => { 
+                cardData[k] = cards[k].spent; 
+                if(cards[k].nonOnlineSpent) cardData[k+'_non'] = cards[k].nonOnlineSpent; 
+                if(cards[k].shared_rebate_cap) cardData[k+'_rebate'] = cards[k].rebate_used || 0;
+            });
+            localStorage.setItem('cc_strategy_v3.4', JSON.stringify({ cards: cardData, history: history }));
+            render(); updateUndoBtn();
+        }
+
+        function clearAllData() { if(confirm('⚠️ 警告：這會清空所有數據。確定？')) { localStorage.removeItem('cc_strategy_v3.4'); location.reload(); } }
+        function updateUndoBtn() { document.getElementById('undoBtn').classList.toggle('hidden', history.length === 0); }
+        load();
+    </script>
+</body>
+</html>
