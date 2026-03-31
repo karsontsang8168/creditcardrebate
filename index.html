@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>信用卡戰略 3.1</title>
+    <title>信用卡戰略 3.2</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -12,8 +12,8 @@
     <div class="max-w-md mx-auto px-4">
         <div class="flex justify-between items-center py-6">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-600">3.1</span></h1>
-                <p class="text-[10px] text-slate-400 font-medium">Full Data + Dual-Cycle Management</p>
+                <h1 class="text-2xl font-bold text-slate-800">簽賬戰略 <span class="text-blue-600">3.2</span></h1>
+                <p class="text-[10px] text-slate-400 font-medium">Safari Bug-fix & Full Data</p>
             </div>
             <button onclick="undoLast()" id="undoBtn" class="hidden p-2 bg-orange-100 text-orange-600 rounded-lg shadow-sm text-xs px-4 font-bold active:scale-95 transition">
                 <i class="fa-solid fa-rotate-left mr-1"></i> 撤銷上筆
@@ -81,4 +81,156 @@
             hsbc_red: { name: "HSBC Red", cap: 10000, spent: 0, group: 'monthly', rates: { online_hkd: 0.04, online_fc: 0.04 } },
             boc_chill: { name: "BOC Chill", cap: 3260, spent: 0, group: 'monthly', rates: { online_hkd: 0.05, online_fc: 0.05, japan_phys: 0.05, overseas_phys: 0.05 } },
             boc_sogo: { name: "BOC Sogo Visa", cap: 2000, spent: 0, group: 'monthly', rates: {} }, 
-            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 0, group: 'aeon', rates: { online
+            aeon_waku: { name: "Aeon Wakuwaku", cap: 3571, spent: 0, group: 'aeon', rates: { online_hkd: 0.06, online_fc: 0.06, japan_phys: 0.03 } },
+            sim_world: { name: "Sim World", cap: 2500, spent: 0, group: 'monthly', threshold: 1000, nonOnlineSpent: 0, rates: { japan_phys: 0.08, overseas_phys: 0.08 } },
+            imotion: { name: "中信 i-Motion", cap: 3800, spent: 0, group: 'monthly', threshold: 3800, rates: { online_hkd: 0.0526, online_fc: 0.0526, dining_local: 0.0526 } },
+            citi_cb: { name: "Citi Cash Back", cap: Infinity, spent: 0, hidden: true, rates: { dining_local: 0.02, online_fc: 0.02, japan_phys: 0.02, overseas_phys: 0.02, default: 0.01 } },
+            sc_simply: { name: "SC Simply Cash", cap: Infinity, spent: 0, hidden: true, rates: { online_fc: 0.02, japan_phys: 0.02, overseas_phys: 0.02, default: 0.015 } }
+        };
+
+        let history = [];
+        let pendingTx = null;
+
+        function load() {
+            const data = localStorage.getItem('cc_strategy_v3.2');
+            if (data) {
+                const saved = JSON.parse(data);
+                Object.keys(cards).forEach(k => { if(saved.cards[k]) cards[k].spent = saved.cards[k]; if(saved.cards[k+'_non']) cards[k].nonOnlineSpent = saved.cards[k+'_non']; });
+                history = saved.history || [];
+            }
+            render(); updateUndoBtn();
+        }
+
+        function render() {
+            const list = document.getElementById('cardList');
+            list.innerHTML = '';
+            Object.keys(cards).forEach(k => {
+                if (cards[k].hidden) return;
+                const remain = Math.max(0, cards[k].cap - cards[k].spent).toFixed(0);
+                const progress = Math.min(100, (cards[k].spent / cards[k].cap) * 100);
+                list.innerHTML += `
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-50">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="font-black text-slate-700 text-sm tracking-tight">${cards[k].name}</span>
+                            <span class="text-xs font-bold ${remain < 100 ? 'text-red-500' : 'text-slate-400'}">剩 $${remain}</span>
+                        </div>
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden shadow-inner"><div class="${remain < 100 ? 'bg-red-500' : 'bg-blue-600'} h-full transition-all duration-1000" style="width: ${progress}%"></div></div>
+                    </div>`;
+            });
+        }
+
+        function suggestBest() {
+            const amtVal = document.getElementById('amt').value;
+            if(!amtVal || parseFloat(amtVal) <= 0) { alert("⚠️ 請先輸入金額"); return; }
+            const amt = parseFloat(amtVal);
+            const cat = document.getElementById('cat').value;
+            const isMobile = document.getElementById('isMobilePay').checked;
+
+            pendingTx = null;
+            document.getElementById('confirmActionDiv').classList.add('hidden');
+
+            let allOptions = [];
+            Object.keys(cards).forEach(k => {
+                const c = cards[k];
+                const remainCap = Math.max(0, (c.cap || Infinity) - c.spent);
+                let rate = c.rates[cat] || c.rates['default'] || 0.004;
+                let warning = '';
+                
+                if (k === 'boc_sogo' && isMobile && !cat.includes('online')) rate = 0.054;
+                if (k === 'sim_world' && (c.nonOnlineSpent + (cat.includes('phys')||cat.includes('dining')?amt:0) < 1000)) warning = '⚠️需滿$1000';
+                if (k === 'imotion' && (c.spent + amt < 3800)) warning = '⚠️需滿$3800';
+
+                let rebate = (amt <= remainCap) ? (amt * rate) : (remainCap * rate + (amt - remainCap) * 0.004);
+                allOptions.push({ key: k, rebate: rebate, rate: rate, remain: Math.max(0, remainCap - amt), warning: warning });
+            });
+
+            allOptions.sort((a, b) => b.rebate - a.rebate);
+            const top3 = allOptions.slice(0, 3);
+
+            const resDiv = document.getElementById('recommendations');
+            resDiv.innerHTML = '';
+            top3.forEach((opt, index) => {
+                // 安全檢查：防止 Infinity 造成 Safari 死機
+                const remainText = opt.remain === Infinity ? '無上限' : '$' + opt.remain.toFixed(0);
+                
+                resDiv.innerHTML += `
+                    <div id="card_${opt.key}" onclick="selectCard('${opt.key}', ${amt}, '${cat}')" class="bg-white p-4 rounded-2xl border-2 border-slate-100 cursor-pointer active:scale-95 transition-all shadow-sm">
+                        <div class="flex justify-between items-center">
+                            <div class="flex-1">
+                                <span class="text-[9px] font-black text-slate-300 uppercase tracking-widest" id="badge_${opt.key}">Rank ${index+1}</span>
+                                <h4 class="font-black text-slate-800 text-sm leading-tight">${cards[opt.key].name} <span class="text-orange-500 text-[10px] ml-1">${opt.warning}</span></h4>
+                                <p class="text-[10px] text-slate-500 mt-1">
+                                    潛在利率: <span class="font-bold text-slate-700">${(opt.rate*100).toFixed(1)}%</span> | 
+                                    簽後餘額: <span class="font-bold text-slate-700">${remainText}</span>
+                                </p>
+                            </div>
+                            <div class="text-right ml-2"><span class="text-xl font-black text-slate-900">$${opt.rebate.toFixed(1)}</span></div>
+                        </div>
+                    </div>`;
+            });
+            document.getElementById('resultArea').classList.remove('hidden');
+        }
+
+        function selectCard(key, amount, cat) {
+            pendingTx = { key, amount, cat };
+            Object.keys(cards).forEach(k => {
+                const el = document.getElementById('card_' + k);
+                if(el) {
+                    el.classList.toggle('border-blue-500', k === key);
+                    el.classList.toggle('bg-blue-50', k === key);
+                    el.classList.toggle('border-slate-100', k !== key);
+                }
+            });
+            document.getElementById('finalConfirmBtn').innerText = `確認已簽 $${amount} (${cards[key].name})`;
+            document.getElementById('confirmActionDiv').classList.remove('hidden');
+        }
+
+        function executeTransaction() {
+            if (!pendingTx) return;
+            const { key, amount, cat } = pendingTx;
+            const nonOnlineAdd = (cat.includes('phys') || cat.includes('dining')) ? amount : 0;
+            history.push({ key, amount, nonOnlineAdd });
+            if (history.length > 5) history.shift();
+            cards[key].spent += amount;
+            if (cards[key].nonOnlineSpent !== undefined) cards[key].nonOnlineSpent += nonOnlineAdd;
+            saveAndRefresh();
+            document.getElementById('amt').value = '';
+            document.getElementById('resultArea').classList.add('hidden');
+            document.getElementById('isMobilePay').checked = false; 
+            pendingTx = null;
+        }
+
+        function resetGroup(groupName) {
+            const groupDesc = groupName === 'monthly' ? "1 號週期卡 (BOC/HSBC/中信)" : "AEON Wakuwaku";
+            if(confirm(`⚠️ 確定要重設 ${groupDesc} 嗎？`)) {
+                Object.keys(cards).forEach(k => {
+                    if(cards[k].group === groupName) {
+                        cards[k].spent = 0;
+                        if(cards[k].nonOnlineSpent !== undefined) cards[k].nonOnlineSpent = 0;
+                    }
+                });
+                saveAndRefresh();
+            }
+        }
+
+        function undoLast() {
+            if (history.length === 0) return;
+            const last = history.pop();
+            cards[last.key].spent -= last.amount;
+            if (cards[last.key].nonOnlineSpent !== undefined) cards[last.key].nonOnlineSpent -= last.nonOnlineAdd;
+            saveAndRefresh();
+        }
+
+        function saveAndRefresh() {
+            const cardData = {};
+            Object.keys(cards).forEach(k => { cardData[k] = cards[k].spent; if(cards[k].nonOnlineSpent) cardData[k+'_non'] = cards[k].nonOnlineSpent; });
+            localStorage.setItem('cc_strategy_v3.2', JSON.stringify({ cards: cardData, history: history }));
+            render(); updateUndoBtn();
+        }
+
+        function clearAllData() { if(confirm('⚠️ 警告：這會清空所有數據。確定？')) { localStorage.removeItem('cc_strategy_v3.2'); location.reload(); } }
+        function updateUndoBtn() { document.getElementById('undoBtn').classList.toggle('hidden', history.length === 0); }
+        load();
+    </script>
+</body>
+</html>
